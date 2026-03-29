@@ -12,8 +12,10 @@
 #include "lvm.h"
 #include "lnumutils.h"
 #include "lbuffer.h"
+#include "lvector.h"
 
 #include <string.h>
+#include <stdio.h>
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -310,7 +312,10 @@ void lua_pushvalue(lua_State* L, int idx)
 int lua_type(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
-    return (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
+    if (o == luaO_nilobject)
+        return LUA_TNONE;
+    int tt = ttype(o);
+    return (tt == LUA_TVECTOR_N) ? LUA_TVECTOR : tt;
 }
 
 const char* lua_typename(lua_State* L, int t)
@@ -520,6 +525,27 @@ const float* lua_tovector(lua_State* L, int idx)
     return vvalue(o);
 }
 
+const float* lua_tovectorn(lua_State* L, int idx, int* n)
+{
+    StkId o = index2addr(L, idx);
+    if (!ttisvector(o))
+        return NULL;
+
+    if (ttype(o) == LUA_TVECTOR)
+    {
+        if (n)
+            *n = LUA_VECTOR_SIZE;
+        return o->value.v;
+    }
+    else
+    {
+        LVector* lv = gco2v(o->value.gc);
+        if (n)
+            *n = lv->len;
+        return lv->data;
+    }
+}
+
 int lua_objlen(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -665,6 +691,28 @@ void lua_pushvector(lua_State* L, float x, float y, float z)
     api_incr_top(L);
 }
 #endif
+
+void lua_pushvectorn(lua_State* L, const float* v, int n)
+{
+    lua_checkstack(L, 1);
+    if (n == LUA_VECTOR_SIZE)
+    {
+#if LUA_VECTOR_SIZE == 4
+        lua_pushvector(L, v[0], v[1], v[2], v[3]);
+#else
+        lua_pushvector(L, v[0], v[1], v[2]);
+#endif
+    }
+    else
+    {
+        luaC_checkGC(L);
+        luaC_threadbarrier(L);
+        LVector* lv = luaV_newvector(L, n);
+        memcpy(lv->data, v, n * sizeof(float));
+        setvnvalue(L, L->top, lv);
+        api_incr_top(L);
+    }
+}
 
 void lua_pushlstring(lua_State* L, const char* s, size_t len)
 {

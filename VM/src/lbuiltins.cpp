@@ -995,8 +995,12 @@ static int luauF_rawset(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
             return -1;
         else if (ttisnumber(key) && luai_numisnan(nvalue(key)))
             return -1;
-        else if (ttisvector(key) && luai_vecisnan(vvalue(key)))
-            return -1;
+        else if (ttisvector(key))
+        {
+            int n = (ttype(key) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(key->value.gc)->len;
+            if (luai_vecisnan(vvalue(key), n))
+                return false;
+        }
 
         LuaTable* t = hvalue(arg0);
         if (t->readonly)
@@ -1055,33 +1059,37 @@ static int luauF_tunpack(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
 static int luauF_vector(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisnumber(arg0) && ttisnumber(args))
+    if (nparams >= 2 && nresults <= 1)
     {
-        float x = (float)nvalue(arg0);
-        float y = (float)nvalue(args);
-        float z = 0.0f;
+        if (!ttisnumber(arg0)) return -1;
+        for (int i = 0; i < nparams - 1; ++i)
+            if (!ttisnumber(args + i)) return -1;
 
-        if (nparams >= 3)
+        if (nparams == LUA_VECTOR_SIZE)
         {
-            if (!ttisnumber(args + 1))
-                return -1;
-            z = (float)nvalue(args + 1);
-        }
-
+            float x = (float)nvalue(arg0);
+            float y = (float)nvalue(args);
+            float z = (nparams >= 3) ? (float)nvalue(args + 1) : 0.0f;
 #if LUA_VECTOR_SIZE == 4
-        float w = 0.0f;
-        if (nparams >= 4)
-        {
-            if (!ttisnumber(args + 2))
-                return -1;
-            w = (float)nvalue(args + 2);
-        }
-        setvvalue(res, x, y, z, w);
+            float w = (nparams >= 4) ? (float)nvalue(args + 2) : 0.0f;
+            setvvalue(res, x, y, z, w);
 #else
-        setvvalue(res, x, y, z, 0.0f);
+            setvvalue(res, x, y, z, 0.0f);
 #endif
+            return 1;
+        }
+        else
+        {
+            float* v = (float*)lua_newbuffer(L, nparams * sizeof(float));
+            v[0] = (float)nvalue(arg0);
+            for (int i = 0; i < nparams - 1; ++i)
+                v[i + 1] = (float)nvalue(args + i);
 
-        return 1;
+            lua_pushvectorn(L, v, nparams);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+            return 1;
+        }
     }
 
     return -1;
@@ -1449,13 +1457,13 @@ static int luauF_vectormagnitude(lua_State* L, StkId res, TValue* arg0, int nres
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
-#if LUA_VECTOR_SIZE == 4
-        setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
-#else
-        setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
-#endif
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i)
+            sum += (double)v[i] * v[i];
 
+        setnvalue(res, sqrt(sum));
         return 1;
     }
 
@@ -1467,16 +1475,32 @@ static int luauF_vectornormalize(lua_State* L, StkId res, TValue* arg0, int nres
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i)
+            sum += (double)v[i] * v[i];
+
+        float invSqrt = (float)(1.0 / sqrt(sum));
+
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
-
-        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
+            setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
 #else
-        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-
-        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, 0.0f);
+            setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = v[i] * invSqrt;
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }
@@ -1490,9 +1514,15 @@ static int luauF_vectorcross(lua_State* L, StkId res, TValue* arg0, int nresults
     {
         const float* a = vvalue(arg0);
         const float* b = vvalue(args);
+        int na = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
+        int nb = (ttype(args) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(args->value.gc)->len;
+
+        if (na != 3 || nb != 3)
+            return -1;
 
         // same for 3- and 4- wide vectors
         setvvalue(res, a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0], 0.0f);
+
         return 1;
     }
 
@@ -1505,13 +1535,17 @@ static int luauF_vectordot(lua_State* L, StkId res, TValue* arg0, int nresults, 
     {
         const float* a = vvalue(arg0);
         const float* b = vvalue(args);
+        int na = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
+        int nb = (ttype(args) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(args->value.gc)->len;
 
-#if LUA_VECTOR_SIZE == 4
-        setnvalue(res, a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
-#else
-        setnvalue(res, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
-#endif
+        if (na != nb)
+            return -1;
 
+        double dot = 0.0;
+        for (int i = 0; i < na; ++i)
+            dot += (double)a[i] * b[i];
+
+        setnvalue(res, dot);
         return 1;
     }
 
@@ -1523,12 +1557,26 @@ static int luauF_vectorfloor(lua_State* L, StkId res, TValue* arg0, int nresults
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        setvvalue(res, floorf(v[0]), floorf(v[1]), floorf(v[2]), floorf(v[3]));
+            setvvalue(res, floorf(v[0]), floorf(v[1]), floorf(v[2]), floorf(v[3]));
 #else
-        setvvalue(res, floorf(v[0]), floorf(v[1]), floorf(v[2]), 0.0f);
+            setvvalue(res, floorf(v[0]), floorf(v[1]), floorf(v[2]), 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = floorf(v[i]);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }
@@ -1541,12 +1589,26 @@ static int luauF_vectorceil(lua_State* L, StkId res, TValue* arg0, int nresults,
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        setvvalue(res, ceilf(v[0]), ceilf(v[1]), ceilf(v[2]), ceilf(v[3]));
+            setvvalue(res, ceilf(v[0]), ceilf(v[1]), ceilf(v[2]), ceilf(v[3]));
 #else
-        setvvalue(res, ceilf(v[0]), ceilf(v[1]), ceilf(v[2]), 0.0f);
+            setvvalue(res, ceilf(v[0]), ceilf(v[1]), ceilf(v[2]), 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = ceilf(v[i]);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }
@@ -1559,12 +1621,26 @@ static int luauF_vectorabs(lua_State* L, StkId res, TValue* arg0, int nresults, 
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        setvvalue(res, fabsf(v[0]), fabsf(v[1]), fabsf(v[2]), fabsf(v[3]));
+            setvvalue(res, fabsf(v[0]), fabsf(v[1]), fabsf(v[2]), fabsf(v[3]));
 #else
-        setvvalue(res, fabsf(v[0]), fabsf(v[1]), fabsf(v[2]), 0.0f);
+            setvvalue(res, fabsf(v[0]), fabsf(v[1]), fabsf(v[2]), 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = fabsf(v[i]);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }
@@ -1577,12 +1653,26 @@ static int luauF_vectorsign(lua_State* L, StkId res, TValue* arg0, int nresults,
     if (nparams >= 1 && nresults <= 1 && ttisvector(arg0))
     {
         const float* v = vvalue(arg0);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        setvvalue(res, luaui_signf(v[0]), luaui_signf(v[1]), luaui_signf(v[2]), luaui_signf(v[3]));
+            setvvalue(res, luaui_signf(v[0]), luaui_signf(v[1]), luaui_signf(v[2]), luaui_signf(v[3]));
 #else
-        setvvalue(res, luaui_signf(v[0]), luaui_signf(v[1]), luaui_signf(v[2]), 0.0f);
+            setvvalue(res, luaui_signf(v[0]), luaui_signf(v[1]), luaui_signf(v[2]), 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = luaui_signf(v[i]);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }
@@ -1597,23 +1687,38 @@ static int luauF_vectorclamp(lua_State* L, StkId res, TValue* arg0, int nresults
         const float* v = vvalue(arg0);
         const float* min = vvalue(args);
         const float* max = vvalue(args + 1);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
+        int nmin = (ttype(args) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(args->value.gc)->len;
+        int nmax = (ttype(args + 1) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v((args + 1)->value.gc)->len;
 
-        if (min[0] <= max[0] && min[1] <= max[1] && min[2] <= max[2])
+        if (n != nmin || n != nmax)
+            return -1;
+
+        for (int i = 0; i < n; ++i)
+            if (!(min[i] <= max[i]))
+                return -1;
+
+        if (n == LUA_VECTOR_SIZE)
         {
 #if LUA_VECTOR_SIZE == 4
-            setvvalue(
-                res,
-                luaui_clampf(v[0], min[0], max[0]),
-                luaui_clampf(v[1], min[1], max[1]),
-                luaui_clampf(v[2], min[2], max[2]),
-                luaui_clampf(v[3], min[3], max[3])
-            );
+            setvvalue(res, luaui_clampf(v[0], min[0], max[0]), luaui_clampf(v[1], min[1], max[1]), luaui_clampf(v[2], min[2], max[2]),
+                luaui_clampf(v[3], min[3], max[3]));
 #else
             setvvalue(res, luaui_clampf(v[0], min[0], max[0]), luaui_clampf(v[1], min[1], max[1]), luaui_clampf(v[2], min[2], max[2]), 0.0f);
 #endif
-
-            return 1;
         }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = luaui_clampf(v[i], min[i], max[i]);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
+
+        return 1;
     }
 
     return -1;
@@ -1623,37 +1728,49 @@ static int luauF_vectormin(lua_State* L, StkId res, TValue* arg0, int nresults, 
 {
     if (nparams >= 2 && nresults <= 1 && ttisvector(arg0) && ttisvector(args))
     {
-        const float* a = vvalue(arg0);
-        const float* b = vvalue(args);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
-        float result[4];
+        float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+        memcpy(resv, vvalue(arg0), n * sizeof(float));
 
-        result[0] = (b[0] < a[0]) ? b[0] : a[0];
-        result[1] = (b[1] < a[1]) ? b[1] : a[1];
-        result[2] = (b[2] < a[2]) ? b[2] : a[2];
-
-#if LUA_VECTOR_SIZE == 4
-        result[3] = (b[3] < a[3]) ? b[3] : a[3];
-#else
-        result[3] = 0.0f;
-#endif
-
-        for (int i = 3; i <= nparams; ++i)
+        for (int i = 1; i < nparams; ++i)
         {
-            if (!ttisvector(args + (i - 2)))
+            TValue* varg = (i == 1) ? args : (args + i - 1);
+            if (!ttisvector(varg))
+            {
+                L->top--; // pop buffer
                 return -1;
+            }
 
-            const float* c = vvalue(args + (i - 2));
+            int nv = (ttype(varg) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(varg->value.gc)->len;
+            if (nv != n)
+            {
+                L->top--; // pop buffer
+                return -1;
+            }
 
-            result[0] = (c[0] < result[0]) ? c[0] : result[0];
-            result[1] = (c[1] < result[1]) ? c[1] : result[1];
-            result[2] = (c[2] < result[2]) ? c[2] : result[2];
-#if LUA_VECTOR_SIZE == 4
-            result[3] = (c[3] < result[3]) ? c[3] : result[3];
-#endif
+            const float* vdata = vvalue(varg);
+            for (int j = 0; j < n; ++j)
+                if (vdata[j] < resv[j])
+                    resv[j] = vdata[j];
         }
 
-        setvvalue(res, result[0], result[1], result[2], result[3]);
+        if (n == LUA_VECTOR_SIZE)
+        {
+#if LUA_VECTOR_SIZE == 4
+            setvvalue(res, resv[0], resv[1], resv[2], resv[3]);
+#else
+            setvvalue(res, resv[0], resv[1], resv[2], 0.0f);
+#endif
+            L->top--; // pop buffer
+        }
+        else
+        {
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
+
         return 1;
     }
 
@@ -1664,37 +1781,49 @@ static int luauF_vectormax(lua_State* L, StkId res, TValue* arg0, int nresults, 
 {
     if (nparams >= 2 && nresults <= 1 && ttisvector(arg0) && ttisvector(args))
     {
-        const float* a = vvalue(arg0);
-        const float* b = vvalue(args);
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
 
-        float result[4];
+        float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+        memcpy(resv, vvalue(arg0), n * sizeof(float));
 
-        result[0] = (b[0] > a[0]) ? b[0] : a[0];
-        result[1] = (b[1] > a[1]) ? b[1] : a[1];
-        result[2] = (b[2] > a[2]) ? b[2] : a[2];
-
-#if LUA_VECTOR_SIZE == 4
-        result[3] = (b[3] > a[3]) ? b[3] : a[3];
-#else
-        result[3] = 0.0f;
-#endif
-
-        for (int i = 3; i <= nparams; ++i)
+        for (int i = 1; i < nparams; ++i)
         {
-            if (!ttisvector(args + (i - 2)))
+            TValue* varg = (i == 1) ? args : (args + i - 1);
+            if (!ttisvector(varg))
+            {
+                L->top--; // pop buffer
                 return -1;
+            }
 
-            const float* c = vvalue(args + (i - 2));
+            int nv = (ttype(varg) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(varg->value.gc)->len;
+            if (nv != n)
+            {
+                L->top--; // pop buffer
+                return -1;
+            }
 
-            result[0] = (c[0] > result[0]) ? c[0] : result[0];
-            result[1] = (c[1] > result[1]) ? c[1] : result[1];
-            result[2] = (c[2] > result[2]) ? c[2] : result[2];
-#if LUA_VECTOR_SIZE == 4
-            result[3] = (c[3] > result[3]) ? c[3] : result[3];
-#endif
+            const float* vdata = vvalue(varg);
+            for (int j = 0; j < n; ++j)
+                if (vdata[j] > resv[j])
+                    resv[j] = vdata[j];
         }
 
-        setvvalue(res, result[0], result[1], result[2], result[3]);
+        if (n == LUA_VECTOR_SIZE)
+        {
+#if LUA_VECTOR_SIZE == 4
+            setvvalue(res, resv[0], resv[1], resv[2], resv[3]);
+#else
+            setvvalue(res, resv[0], resv[1], resv[2], 0.0f);
+#endif
+            L->top--; // pop buffer
+        }
+        else
+        {
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
+
         return 1;
     }
 
@@ -1708,12 +1837,30 @@ static int luauF_vectorlerp(lua_State* L, StkId res, TValue* arg0, int nresults,
         const float* a = vvalue(arg0);
         const float* b = vvalue(args);
         const float t = static_cast<float>(nvalue(args + 1));
+        int n = (ttype(arg0) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(arg0->value.gc)->len;
+        int nb = (ttype(args) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(args->value.gc)->len;
 
+        if (n != nb)
+            return -1;
+
+        if (n == LUA_VECTOR_SIZE)
+        {
 #if LUA_VECTOR_SIZE == 4
-        setvvalue(res, luai_lerpf(a[0], b[0], t), luai_lerpf(a[1], b[1], t), luai_lerpf(a[2], b[2], t), luai_lerpf(a[3], b[3], t));
+            setvvalue(res, luai_lerpf(a[0], b[0], t), luai_lerpf(a[1], b[1], t), luai_lerpf(a[2], b[2], t), luai_lerpf(a[3], b[3], t));
 #else
-        setvvalue(res, luai_lerpf(a[0], b[0], t), luai_lerpf(a[1], b[1], t), luai_lerpf(a[2], b[2], t), 0.0f);
+            setvvalue(res, luai_lerpf(a[0], b[0], t), luai_lerpf(a[1], b[1], t), luai_lerpf(a[2], b[2], t), 0.0f);
 #endif
+        }
+        else
+        {
+            float* resv = (float*)lua_newbuffer(L, n * sizeof(float));
+            for (int i = 0; i < n; ++i)
+                resv[i] = luai_lerpf(a[i], b[i], t);
+
+            lua_pushvectorn(L, resv, n);
+            setobj(L, res, L->top - 1);
+            L->top -= 2; // pop buffer and vector
+        }
 
         return 1;
     }

@@ -45,7 +45,11 @@ int luaO_rawequalObj(const TValue* t1, const TValue* t2)
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
         case LUA_TVECTOR:
-            return luai_veceq(vvalue(t1), vvalue(t2));
+        {
+            int n1 = (ttype(t1) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t1->value.gc)->len;
+            int n2 = (ttype(t2) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t2->value.gc)->len;
+            return luai_veceq(vvalue(t1), n1, vvalue(t2), n2);
+        }
         case LUA_TBOOLEAN:
             return bvalue(t1) == bvalue(t2); // boolean true must be 1 !!
         case LUA_TLIGHTUSERDATA:
@@ -68,7 +72,11 @@ int luaO_rawequalKey(const TKey* t1, const TValue* t2)
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
         case LUA_TVECTOR:
-            return luai_veceq(vvalue(t1), vvalue(t2));
+        {
+            int n1 = (ttype(t1) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t1->value.gc)->len;
+            int n2 = (ttype(t2) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t2->value.gc)->len;
+            return luai_veceq(vvalue(t1), n1, vvalue(t2), n2);
+        }
         case LUA_TBOOLEAN:
             return bvalue(t1) == bvalue(t2); // boolean true must be 1 !!
         case LUA_TLIGHTUSERDATA:

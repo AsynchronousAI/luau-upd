@@ -10,6 +10,7 @@
 #include "ltable.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lvector.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -168,6 +169,9 @@ static void validateobj(global_State* g, GCObject* o)
         break;
 
     case LUA_TBUFFER:
+        break;
+
+    case LUA_TVECTOR_N:
         break;
 
     case LUA_TPROTO:
@@ -483,6 +487,11 @@ static void dumpbuffer(FILE* f, Buffer* b)
     fprintf(f, "{\"type\":\"buffer\",\"cat\":%d,\"size\":%d}", b->memcat, int(sizebuffer(b->len)));
 }
 
+static void dumpvector(FILE* f, LVector* v)
+{
+    fprintf(f, "{\"type\":\"vector\",\"cat\":%d,\"size\":%d,\"len\":%d}", v->memcat, int(sizevector(v->len)), v->len);
+}
+
 static void dumpproto(FILE* f, Proto* p)
 {
     size_t size = sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
@@ -553,6 +562,9 @@ static void dumpobj(FILE* f, GCObject* o)
 
     case LUA_TBUFFER:
         return dumpbuffer(f, gco2buf(o));
+
+    case LUA_TVECTOR_N:
+        return dumpvector(f, gco2v(o));
 
     case LUA_TPROTO:
         return dumpproto(f, gco2p(o));
@@ -820,6 +832,11 @@ static void enumbuffer(EnumContext* ctx, Buffer* b)
     enumnode(ctx, obj2gco(b), sizebuffer(b->len), NULL);
 }
 
+static void enumvector(EnumContext* ctx, LVector* v)
+{
+    enumnode(ctx, obj2gco(v), sizevector(v->len), NULL);
+}
+
 static void enumproto(EnumContext* ctx, Proto* p)
 {
     size_t size = sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
@@ -878,6 +895,9 @@ static void enumobj(EnumContext* ctx, GCObject* o)
 
     case LUA_TBUFFER:
         return enumbuffer(ctx, gco2buf(o));
+
+    case LUA_TVECTOR_N:
+        return enumvector(ctx, gco2v(o));
 
     case LUA_TPROTO:
         return enumproto(ctx, gco2p(o));

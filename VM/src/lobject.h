@@ -60,7 +60,7 @@ typedef struct lua_TValue
 #define ttisthread(o) (ttype(o) == LUA_TTHREAD)
 #define ttisbuffer(o) (ttype(o) == LUA_TBUFFER)
 #define ttislightuserdata(o) (ttype(o) == LUA_TLIGHTUSERDATA)
-#define ttisvector(o) (ttype(o) == LUA_TVECTOR)
+#define ttisvector(o) (ttype(o) == LUA_TVECTOR || ttype(o) == LUA_TVECTOR_N)
 #define ttisupval(o) (ttype(o) == LUA_TUPVAL)
 
 // Macros to access values
@@ -68,7 +68,7 @@ typedef struct lua_TValue
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
-#define vvalue(o) check_exp(ttisvector(o), (o)->value.v)
+#define vvalue(o) check_exp(ttisvector(o), (ttype(o) == LUA_TVECTOR ? (o)->value.v : gco2v((o)->value.gc)->data))
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
 #define uvalue(o) check_exp(ttisuserdata(o), &(o)->value.gc->u)
 #define clvalue(o) check_exp(ttisfunction(o), &(o)->value.gc->cl)
@@ -124,6 +124,14 @@ typedef struct lua_TValue
         i_o->tt = LUA_TVECTOR; \
     }
 #endif
+
+#define setvnvalue(L, obj, x) \
+    { \
+        TValue* i_o = (obj); \
+        i_o->value.gc = cast_to(GCObject*, (x)); \
+        i_o->tt = LUA_TVECTOR_N; \
+        checkliveness(L->global, i_o); \
+    }
 
 #define setpvalue(obj, x, tag) \
     { \
@@ -278,6 +286,15 @@ typedef struct LuauBuffer
 
     alignas(8) char data[1];
 } Buffer;
+
+typedef struct LVector
+{
+    CommonHeader;
+
+    unsigned int len;
+
+    alignas(8) float data[1];
+} LVector;
 
 /*
 ** Function Prototypes

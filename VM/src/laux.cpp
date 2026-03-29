@@ -250,9 +250,29 @@ const float* luaL_checkvector(lua_State* L, int narg)
     return v;
 }
 
+const float* luaL_checkvectorn(lua_State* L, int narg, int* n)
+{
+    const float* v = lua_tovectorn(L, narg, n);
+    if (!v)
+        tag_error(L, narg, LUA_TVECTOR);
+    return v;
+}
+
 const float* luaL_optvector(lua_State* L, int narg, const float* def)
 {
     return luaL_opt(L, luaL_checkvector, narg, def);
+}
+
+const float* luaL_optvectorn(lua_State* L, int narg, const float* def, int* n)
+{
+    if (lua_isnoneornil(L, narg))
+    {
+        if (n)
+            *n = LUA_VECTOR_SIZE;
+        return def;
+    }
+    else
+        return luaL_checkvectorn(L, narg, n);
 }
 
 int luaL_getmetafield(lua_State* L, int obj, const char* event)
@@ -631,11 +651,12 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     }
     case LUA_TVECTOR:
     {
-        const float* v = lua_tovector(L, idx);
+        int n;
+        const float* v = lua_tovectorn(L, idx, &n);
 
-        char s[LUAI_MAXNUM2STR * LUA_VECTOR_SIZE];
+        char* s = (char*)lua_newbuffer(L, LUAI_MAXNUM2STR * n);
         char* e = s;
-        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+        for (int i = 0; i < n; ++i)
         {
             if (i != 0)
             {
@@ -645,6 +666,7 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
             e = luai_num2str(e, v[i]);
         }
         lua_pushlstring(L, s, e - s);
+        lua_remove(L, -2); // remove buffer
         break;
     }
     case LUA_TSTRING:

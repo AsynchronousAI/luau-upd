@@ -8,6 +8,7 @@
 #include "lgc.h"
 #include "ldo.h"
 #include "lnumutils.h"
+#include "lvector.h"
 
 #include <string.h>
 
@@ -115,6 +116,19 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 return;
             }
             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
+        }
+        else if (ttisvector(t) && ttisnumber(key))
+        {
+            double idx = nvalue(key);
+            int n = (ttype(t) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t->value.gc)->len;
+            if (idx >= 1.0 && idx <= double(n) && double(int(idx)) == idx)
+            {
+                setnvalue(val, vvalue(t)[int(idx) - 1]);
+                return;
+            }
+            // else fall through to INDEX TM or error
+            if (ttisnil(tm = luaT_gettmbyobj(L, t, TM_INDEX)))
+                luaG_indexerror(L, t, key);
         }
         else if (ttisnil(tm = luaT_gettmbyobj(L, t, TM_INDEX)))
             luaG_indexerror(L, t, key);
@@ -284,7 +298,11 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
     case LUA_TNUMBER:
         return luai_numeq(nvalue(t1), nvalue(t2));
     case LUA_TVECTOR:
-        return luai_veceq(vvalue(t1), vvalue(t2));
+    {
+        int n1 = (ttype(t1) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t1->value.gc)->len;
+        int n2 = (ttype(t2) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(t2->value.gc)->len;
+        return luai_veceq(vvalue(t1), n1, vvalue(t2), n2);
+    }
     case LUA_TBOOLEAN:
         return bvalue(t1) == bvalue(t2); // true must be 1 !!
     case LUA_TLIGHTUSERDATA:
@@ -379,128 +397,240 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
     TValue tempb, tempc;
     const TValue *b, *c;
 
-    // vector operations that we support:
-    // v+v  v-v  -v    (add/sub/neg)
-    // v*v  s*v  v*s   (mul)
-    // v/v  s/v  v/s   (div)
-    // v//v s//v v//s  (floor div)
     const float* vb = ttisvector(rb) ? vvalue(rb) : nullptr;
     const float* vc = ttisvector(rc) ? vvalue(rc) : nullptr;
+    int nb = vb ? ((ttype(rb) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(rb->value.gc)->len) : 0;
+    int nc = vc ? ((ttype(rc) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(rc->value.gc)->len) : 0;
 
     if (vb && vc)
     {
+        if (nb != nc)
+        {
+            if (!call_binTM(L, rb, rc, ra, op))
+                luaG_aritherror(L, rb, rc, op);
+            return;
+        }
+
+        float res[4];
+        float* vres = res;
+        if (nb > 4)
+        {
+            lua_rawcheckstack(L, 1);
+            vres = (float*)lua_newbuffer(L, nb * sizeof(float));
+        }
+
         switch (op)
         {
         case TM_ADD:
-            setvvalue(ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
-            return;
-        case TM_SUB:
-            setvvalue(ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
-            return;
-        case TM_MUL:
-            setvvalue(ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
-            return;
-        case TM_DIV:
-            setvvalue(ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
-            return;
-        case TM_IDIV:
-            setvvalue(
-                ra,
-                float(luai_numidiv(vb[0], vc[0])),
-                float(luai_numidiv(vb[1], vc[1])),
-                float(luai_numidiv(vb[2], vc[2])),
-                float(luai_numidiv(vb[3], vc[3]))
-            );
-            return;
-        case TM_UNM:
-            setvvalue(ra, -vb[0], -vb[1], -vb[2], -vb[3]);
-            return;
-        default:
+            for (int i = 0; i < nb; ++i) vres[i] = vb[i] + vc[i];
             break;
+        case TM_SUB:
+            for (int i = 0; i < nb; ++i) vres[i] = vb[i] - vc[i];
+            break;
+        case TM_MUL:
+            for (int i = 0; i < nb; ++i) vres[i] = vb[i] * vc[i];
+            break;
+        case TM_DIV:
+            for (int i = 0; i < nb; ++i) vres[i] = vb[i] / vc[i];
+            break;
+        case TM_IDIV:
+            for (int i = 0; i < nb; ++i) vres[i] = float(luai_numidiv(vb[i], vc[i]));
+            break;
+        default:
+            if (nb > 4) L->top--;
+            if (!call_binTM(L, rb, rc, ra, op))
+                luaG_aritherror(L, rb, rc, op);
+            return;
         }
+
+        if (nb == LUA_VECTOR_SIZE)
+        {
+#if LUA_VECTOR_SIZE == 4
+            setvvalue(ra, vres[0], vres[1], vres[2], vres[3]);
+#else
+            setvvalue(ra, vres[0], vres[1], vres[2], 0.0f);
+#endif
+            if (nb > 4) L->top--;
+        }
+        else
+        {
+            luaC_checkGC(L);
+            luaC_threadbarrier(L);
+            LVector* lv = luaV_newvector(L, nb);
+            memcpy(lv->data, vres, nb * sizeof(float));
+            if (nb > 4) L->top--;
+            setvnvalue(L, ra, lv);
+        }
+        return;
     }
     else if (vb)
     {
-        c = ttisnumber(rc) ? rc : luaV_tonumber(rc, &tempc);
+        if (op == TM_UNM)
+        {
+            float res[4];
+            float* vres = res;
+            if (nb > 4)
+            {
+                lua_rawcheckstack(L, 1);
+                vres = (float*)lua_newbuffer(L, nb * sizeof(float));
+            }
+            for (int i = 0; i < nb; ++i) vres[i] = -vb[i];
 
+            if (nb == LUA_VECTOR_SIZE)
+            {
+#if LUA_VECTOR_SIZE == 4
+                setvvalue(ra, vres[0], vres[1], vres[2], vres[3]);
+#else
+                setvvalue(ra, vres[0], vres[1], vres[2], 0.0f);
+#endif
+                if (nb > 4) L->top--;
+            }
+            else
+            {
+                luaC_checkGC(L);
+                luaC_threadbarrier(L);
+                LVector* lv = luaV_newvector(L, nb);
+                memcpy(lv->data, vres, nb * sizeof(float));
+                if (nb > 4) L->top--;
+                setvnvalue(L, ra, lv);
+            }
+            return;
+        }
+
+        c = ttisnumber(rc) ? rc : luaV_tonumber(rc, &tempc);
         if (c)
         {
-            float nc = cast_to(float, nvalue(c));
+            float nc_val = cast_to(float, nvalue(c));
+            float res[4];
+            float* vres = res;
+            if (nb > 4)
+            {
+                lua_rawcheckstack(L, 1);
+                vres = (float*)lua_newbuffer(L, nb * sizeof(float));
+            }
 
             switch (op)
             {
             case TM_MUL:
-                setvvalue(ra, vb[0] * nc, vb[1] * nc, vb[2] * nc, vb[3] * nc);
-                return;
-            case TM_DIV:
-                setvvalue(ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
-                return;
-            case TM_IDIV:
-                setvvalue(
-                    ra, float(luai_numidiv(vb[0], nc)), float(luai_numidiv(vb[1], nc)), float(luai_numidiv(vb[2], nc)), float(luai_numidiv(vb[3], nc))
-                );
-                return;
-            default:
+                for (int i = 0; i < nb; ++i) vres[i] = vb[i] * nc_val;
                 break;
+            case TM_DIV:
+                for (int i = 0; i < nb; ++i) vres[i] = vb[i] / nc_val;
+                break;
+            case TM_IDIV:
+                for (int i = 0; i < nb; ++i) vres[i] = float(luai_numidiv(vb[i], nc_val));
+                break;
+            default:
+                if (nb > 4) L->top--;
+                if (!call_binTM(L, rb, rc, ra, op))
+                    luaG_aritherror(L, rb, rc, op);
+                return;
             }
+
+            if (nb == LUA_VECTOR_SIZE)
+            {
+#if LUA_VECTOR_SIZE == 4
+                setvvalue(ra, vres[0], vres[1], vres[2], vres[3]);
+#else
+                setvvalue(ra, vres[0], vres[1], vres[2], 0.0f);
+#endif
+                if (nb > 4) L->top--;
+            }
+            else
+            {
+                luaC_checkGC(L);
+                luaC_threadbarrier(L);
+                LVector* lv = luaV_newvector(L, nb);
+                memcpy(lv->data, vres, nb * sizeof(float));
+                if (nb > 4) L->top--;
+                setvnvalue(L, ra, lv);
+            }
+            return;
         }
     }
     else if (vc)
     {
         b = ttisnumber(rb) ? rb : luaV_tonumber(rb, &tempb);
-
         if (b)
         {
-            float nb = cast_to(float, nvalue(b));
+            float nb_val = cast_to(float, nvalue(b));
+            float res[4];
+            float* vres = res;
+            if (nc > 4)
+            {
+                lua_rawcheckstack(L, 1);
+                vres = (float*)lua_newbuffer(L, nc * sizeof(float));
+            }
 
             switch (op)
             {
             case TM_MUL:
-                setvvalue(ra, nb * vc[0], nb * vc[1], nb * vc[2], nb * vc[3]);
-                return;
-            case TM_DIV:
-                setvvalue(ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
-                return;
-            case TM_IDIV:
-                setvvalue(
-                    ra, float(luai_numidiv(nb, vc[0])), float(luai_numidiv(nb, vc[1])), float(luai_numidiv(nb, vc[2])), float(luai_numidiv(nb, vc[3]))
-                );
-                return;
-            default:
+                for (int i = 0; i < nc; ++i) vres[i] = nb_val * vc[i];
                 break;
+            case TM_DIV:
+                for (int i = 0; i < nc; ++i) vres[i] = nb_val / vc[i];
+                break;
+            case TM_IDIV:
+                for (int i = 0; i < nc; ++i) vres[i] = float(luai_numidiv(nb_val, vc[i]));
+                break;
+            default:
+                if (nc > 4) L->top--;
+                if (!call_binTM(L, rb, rc, ra, op))
+                    luaG_aritherror(L, rb, rc, op);
+                return;
             }
+
+            if (nc == LUA_VECTOR_SIZE)
+            {
+#if LUA_VECTOR_SIZE == 4
+                setvvalue(ra, vres[0], vres[1], vres[2], vres[3]);
+#else
+                setvvalue(ra, vres[0], vres[1], vres[2], 0.0f);
+#endif
+                if (nc > 4) L->top--;
+            }
+            else
+            {
+                luaC_checkGC(L);
+                luaC_threadbarrier(L);
+                LVector* lv = luaV_newvector(L, nc);
+                memcpy(lv->data, vres, nc * sizeof(float));
+                if (nc > 4) L->top--;
+                setvnvalue(L, ra, lv);
+            }
+            return;
         }
     }
 
     if ((b = luaV_tonumber(rb, &tempb)) != NULL && (c = luaV_tonumber(rc, &tempc)) != NULL)
     {
-        double nb = nvalue(b), nc = nvalue(c);
+        double nb_num = nvalue(b), nc_num = nvalue(c);
 
         switch (op)
         {
         case TM_ADD:
-            setnvalue(ra, luai_numadd(nb, nc));
+            setnvalue(ra, luai_numadd(nb_num, nc_num));
             break;
         case TM_SUB:
-            setnvalue(ra, luai_numsub(nb, nc));
+            setnvalue(ra, luai_numsub(nb_num, nc_num));
             break;
         case TM_MUL:
-            setnvalue(ra, luai_nummul(nb, nc));
+            setnvalue(ra, luai_nummul(nb_num, nc_num));
             break;
         case TM_DIV:
-            setnvalue(ra, luai_numdiv(nb, nc));
+            setnvalue(ra, luai_numdiv(nb_num, nc_num));
             break;
         case TM_IDIV:
-            setnvalue(ra, luai_numidiv(nb, nc));
+            setnvalue(ra, luai_numidiv(nb_num, nc_num));
             break;
         case TM_MOD:
-            setnvalue(ra, luai_nummod(nb, nc));
+            setnvalue(ra, luai_nummod(nb_num, nc_num));
             break;
         case TM_POW:
-            setnvalue(ra, luai_numpow(nb, nc));
+            setnvalue(ra, luai_numpow(nb_num, nc_num));
             break;
         case TM_UNM:
-            setnvalue(ra, luai_numunm(nb));
+            setnvalue(ra, luai_numunm(nb_num));
             break;
         default:
             LUAU_ASSERT(0);

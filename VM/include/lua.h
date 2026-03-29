@@ -83,6 +83,7 @@ enum lua_Type
     LUA_TUSERDATA,
     LUA_TTHREAD,
     LUA_TBUFFER,
+    LUA_TVECTOR_N,
 
     // values below this line are used in GCObject tags but may never show up in TValue type tags
     LUA_TPROTO,
@@ -149,6 +150,7 @@ LUA_API double lua_tonumberx(lua_State* L, int idx, int* isnum);
 LUA_API int lua_tointegerx(lua_State* L, int idx, int* isnum);
 LUA_API unsigned lua_tounsignedx(lua_State* L, int idx, int* isnum);
 LUA_API const float* lua_tovector(lua_State* L, int idx);
+LUA_API const float* lua_tovectorn(lua_State* L, int idx, int* n);
 LUA_API int lua_toboolean(lua_State* L, int idx);
 LUA_API const char* lua_tolstring(lua_State* L, int idx, size_t* len);
 LUA_API const char* lua_tostringatom(lua_State* L, int idx, int* atom);
@@ -178,6 +180,7 @@ LUA_API void lua_pushvector(lua_State* L, float x, float y, float z, float w);
 #else
 LUA_API void lua_pushvector(lua_State* L, float x, float y, float z);
 #endif
+LUA_API void lua_pushvectorn(lua_State* L, const float* v, int n);
 LUA_API void lua_pushlstring(lua_State* L, const char* s, size_t l);
 LUA_API void lua_pushstring(lua_State* L, const char* s);
 LUA_API const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp);

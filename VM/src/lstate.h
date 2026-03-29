@@ -286,6 +286,7 @@ union GCObject
     struct UpVal uv;
     struct lua_State th; // thread
     struct LuauBuffer buf;
+    struct LVector v;
 };
 
 // macros to convert a GCObject into a specific value
@@ -297,6 +298,7 @@ union GCObject
 #define gco2uv(o) check_exp((o)->gch.tt == LUA_TUPVAL, &((o)->uv))
 #define gco2th(o) check_exp((o)->gch.tt == LUA_TTHREAD, &((o)->th))
 #define gco2buf(o) check_exp((o)->gch.tt == LUA_TBUFFER, &((o)->buf))
+#define gco2v(o) check_exp((o)->gch.tt == LUA_TVECTOR_N, &((o)->v))
 
 // macro to convert any Lua object into a GCObject
 #define obj2gco(v) check_exp(iscollectable(v), cast_to(GCObject*, (v) + 0))

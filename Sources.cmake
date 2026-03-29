@@ -373,12 +373,14 @@ target_sources(Luau.VM PRIVATE
     VM/src/ludata.cpp
     VM/src/lutf8lib.cpp
     VM/src/lveclib.cpp
+    VM/src/lvector.cpp
     VM/src/lvmexecute.cpp
     VM/src/lvmload.cpp
     VM/src/lvmutils.cpp
 
     VM/src/lapi.h
     VM/src/lbuffer.h
+    VM/src/lvector.h
     VM/src/lbuiltins.h
     VM/src/lbytecode.h
     VM/src/lcommon.h

@@ -15,22 +15,22 @@
 #define luai_numlt(a, b) ((a) < (b))
 #define luai_numle(a, b) ((a) <= (b))
 
-inline bool luai_veceq(const float* a, const float* b)
+inline bool luai_veceq(const float* a, int na, const float* b, int nb)
 {
-#if LUA_VECTOR_SIZE == 4
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
-#else
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
-#endif
+    if (na != nb)
+        return false;
+    for (int i = 0; i < na; ++i)
+        if (a[i] != b[i])
+            return false;
+    return true;
 }
 
-inline bool luai_vecisnan(const float* a)
+inline bool luai_vecisnan(const float* a, int n)
 {
-#if LUA_VECTOR_SIZE == 4
-    return a[0] != a[0] || a[1] != a[1] || a[2] != a[2] || a[3] != a[3];
-#else
-    return a[0] != a[0] || a[1] != a[1] || a[2] != a[2];
-#endif
+    for (int i = 0; i < n; ++i)
+        if (a[i] != a[i])
+            return true;
+    return false;
 }
 
 inline float luaui_signf(float v)

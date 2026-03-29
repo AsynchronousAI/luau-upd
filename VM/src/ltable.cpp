@@ -709,10 +709,12 @@ TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
 {
     if (ttisnil(key))
         luaG_runerror(L, "table index is nil");
-    else if (ttisnumber(key) && luai_numisnan(nvalue(key)))
-        luaG_runerror(L, "table index is NaN");
-    else if (ttisvector(key) && luai_vecisnan(vvalue(key)))
-        luaG_runerror(L, "table index contains NaN");
+    else if (ttisvector(key))
+    {
+        int n = (ttype(key) == LUA_TVECTOR) ? LUA_VECTOR_SIZE : gco2v(key->value.gc)->len;
+        if (luai_vecisnan(vvalue(key), n))
+            luaG_runerror(L, "table index is NaN");
+    }
     return newkey(L, t, key);
 }
 

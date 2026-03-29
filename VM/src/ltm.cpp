@@ -27,6 +27,7 @@ const char* const luaT_typenames[] = {
     "userdata",
     "thread",
     "buffer",
+    "vector",
 };
 
 const char* const luaT_eventname[] = {
@@ -110,7 +111,10 @@ const TValue* luaT_gettmbyobj(lua_State* L, const TValue* o, TMS event)
         mt = uvalue(o)->metatable;
         break;
     default:
-        mt = L->global->mt[ttype(o)];
+    {
+        int tt = ttype(o);
+        mt = L->global->mt[(tt == LUA_TVECTOR_N) ? LUA_TVECTOR : tt];
+    }
     }
     return (mt ? luaH_getstr(mt, L->global->tmname[event]) : luaO_nilobject);
 }
